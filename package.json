@@ -10,7 +10,9 @@
     "format": "biome format --write .",
     "check": "biome check .",
     "check:write": "biome check --write .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "vitest": "vitest",
+    "playwright": "vitest"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",
