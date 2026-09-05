@@ -1,26 +1,36 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+import { cn } from "@/lib/utils";
+import { fraunces, plexMono, plexSans } from "./fonts";
 
 export const metadata: Metadata = {
   title: "ScholarTrace",
   description:
-    "ScholarTrace — Continuous Academic Reference Monitoring A research integrity platform that helps researchers and universities continuously monitor cited papers, detect retractions and critical status changes, analyze their impact on registered research, and maintain an auditable history of citation-related events.",
+    "ScholarTrace — continuous academic reference monitoring. Track cited papers, catch retractions early, and keep an auditable record of citation integrity.",
+  openGraph: {
+    title: "ScholarTrace",
+    description: "Continuous academic reference monitoring for researchers and universities.",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "ScholarTrace",
+    description: "Continuous academic reference monitoring for researchers and universities.",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
+    <html
+      lang="en"
+      className={cn(
+        "h-full",
+        "antialiased",
+        fraunces.variable,
+        plexSans.variable,
+        plexMono.variable,
+      )}
+    >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

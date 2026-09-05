@@ -1,0 +1,173 @@
+stateDiagram-v2
+
+    %% =========================
+    %% DOI resolution lifecycle
+    %% =========================
+
+    state "unmonitored" as unmonitored
+    state "pending_resolution" as pending_resolution
+    state "resolved" as resolved
+    state "resolution_failed" as resolution_failed
+    state "resolution_permanently_failed" as resolution_permanently_failed
+
+    unmonitored --> pending_resolution : valid DOI detected
+    pending_resolution --> resolved : lookup succeeds
+    pending_resolution --> resolution_failed : lookup fails
+    resolution_failed --> pending_resolution : retry, attempts < 5
+    resolution_failed --> resolution_permanently_failed : 5 failed attempts
+    resolution_permanently_failed --> pending_resolution : DOI corrected / manual retry
+
+    note right of unmonitored
+        Used when:
+        • no DOI is present, or
+        • DOI is malformed.
+
+        Malformed DOI additionally sets
+        raw_doi_invalid = true.
+
+        This is not a rejected import row.
+    end note
+
+    note right of pending_resolution
+        Asynchronous DOI resolution
+        through Crossref.
+    end note
+
+    note right of resolution_failed
+        Retryable technical or lookup failure.
+
+        Retry policy:
+        maximum 5 attempts
+        with exponential backoff.
+    end note
+
+    note right of resolution_permanently_failed
+        Terminal resolution state.
+
+        Means the DOI could not be resolved
+        after the configured retry limit.
+
+        This does NOT mean the scholarly work
+        is retracted or invalid.
+
+        A corrected DOI can reopen resolution.
+    end note
+
+    %% =========================
+    %% Publication status lifecycle
+    %% =========================
+
+    state "ACTIVE" as active
+    state "RETRACTED" as retracted
+
+    resolved --> active : derived status = ACTIVE
+    resolved --> retracted : derived status = RETRACTED
+    active --> retracted : latest relevant event = RETRACTION
+    retracted --> active : latest relevant event = REINSTATEMENT
+
+    note right of active
+        Status is derived, not independently
+        mutated by every event.
+
+        Default:
+        ACTIVE when there is no applicable
+        RETRACTION / REINSTATEMENT history.
+
+        Latest relevant event by
+        source_timestamp wins.
+    end note
+
+    note right of retracted
+        Current status is determined by the
+        latest RETRACTION or REINSTATEMENT
+        event using EVENT SOURCE timestamp.
+
+        RETRACTION → RETRACTED
+        REINSTATEMENT → ACTIVE
+
+        This handles backfilled and
+        late-arriving events correctly.
+    end note
+
+    note left of active
+        CORRECTION and
+        EXPRESSION_OF_CONCERN are
+        tracked as historical events.
+
+        They do NOT automatically change
+        publication status in the MVP.
+    end note
+
+    %% =========================
+    %% Status derivation algorithm
+    %% =========================
+
+    state "event history" as event_history
+    state "filter RETRACTION / REINSTATEMENT" as relevant_events
+    state "sort by source_timestamp" as sort_events
+    state "take latest relevant event" as latest_event
+
+    event_history --> relevant_events
+    relevant_events --> sort_events
+    sort_events --> latest_event
+    latest_event --> retracted : RETRACTION
+    latest_event --> active : REINSTATEMENT
+
+    note right of latest_event
+        Deterministic status algorithm:
+
+        1. Start with ACTIVE.
+        2. Filter events to:
+           RETRACTION, REINSTATEMENT.
+        3. Sort ascending by source_timestamp.
+        4. Latest event determines status.
+    end note
+
+    %% =========================
+    %% Event / notification behavior
+    %% =========================
+
+    state "new external event" as new_event
+    state "known external event" as known_event
+    state "notification created" as notification_created
+    state "no action" as no_action
+
+    new_event --> notification_created : applicable paper citation exists
+    known_event --> no_action : idempotent
+
+    note right of new_event
+        New event is identified using
+        external event identity/provenance.
+
+        Notification idempotency is scoped to:
+        researcher + event + paper.
+    end note
+
+    note right of notification_created
+        If one researcher has multiple papers
+        citing the affected ScholarlyWork,
+        each affected paper gets its own
+        notification.
+
+        Repeated citation of the same event
+        within one paper does not duplicate it.
+    end note
+
+    %% =========================
+    %% Manual verification
+    %% =========================
+
+    state "manual verification" as manual_verification
+    state "system-level admin" as system_admin
+
+    system_admin --> manual_verification : verify external evidence
+    manual_verification --> new_event : create RetractionEvent
+
+    note right of manual_verification
+        MVP:
+        System-level admin only.
+
+        Manual event stores:
+        source = manual
+        verified_by = system admin
+    end note

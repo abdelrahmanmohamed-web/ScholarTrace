@@ -1,0 +1,132 @@
+flowchart TD
+
+    %% =========================
+    %% Core domain
+    %% =========================
+
+    subgraph CORE[Core domain]
+        direction TB
+        U["University<br/><br/>Research institution<br/>Authorization boundary"]
+        R["Researcher<br/><br/>Registered researcher account"]
+        A["ResearcherAffiliation<br/><br/>Researcher ↔ University<br/>role • dates • primary<br/>Supports concurrent & historical affiliations"]
+        P["ResearchPaper<br/><br/>Owned by one Researcher<br/>Stores immutable publication-time affiliation snapshot"]
+        Ref["Reference<br/><br/>Citation from a ResearchPaper<br/>normalized_doi • raw_doi_invalid"]
+        W["ScholarlyWork<br/><br/>Canonical scholarly work<br/>Identified by normalized DOI<br/>Current status derived from events"]
+        E["RetractionEvent<br/><br/>Historical external event<br/>RETRACTION • CORRECTION<br/>EXPRESSION_OF_CONCERN • REINSTATEMENT"]
+        MC["MonitoringCheck<br/><br/>One monitoring execution<br/>success • partial • failed<br/>cursor_value = last_index_date"]
+        N["Notification<br/><br/>Researcher-facing reaction<br/>to a relevant new event<br/>Idempotent per researcher + event + paper"]
+    end
+
+    %% =========================
+    %% Core relationships
+    %% =========================
+
+    U -->|has affiliations| A
+    R -->|has affiliations| A
+    A -->|belongs to| U
+    A -->|belongs to| R
+
+    R -->|owns| P
+    P -->|published while affiliated via immutable snapshot| A
+    P -->|contains| Ref
+    Ref -->|belongs to| P
+
+    Ref -.->|optional: resolved by DOI| W
+    W -->|referenced by| Ref
+
+    W -->|has event history| E
+    E -->|concerns| W
+
+    E -.->|optionally discovered during| MC
+    MC -->|may discover| E
+
+    E -->|may trigger| N
+    N -->|concerns| E
+    N -->|sent to| R
+    N -.->|references originating citation| Ref
+
+    %% =========================
+    %% Important domain rules
+    %% =========================
+
+    AUTH["Authorization rule<br/><br/>University access to a Researcher<br/>requires CURRENT ACTIVE affiliation.<br/><br/>University access to a specific ResearchPaper<br/>is granted when either:<br/>1. researcher has a current active affiliation, OR<br/>2. paper's immutable publication-time affiliation<br/>belongs to that University.<br/><br/>Historical affiliation alone does not grant<br/>general researcher-wide access."]
+
+    PUBAFF["Publication affiliation rule<br/><br/>ResearchPaper stores the affiliation<br/>captured AT PUBLICATION TIME as an<br/>immutable snapshot/reference.<br/>It is not recomputed at query time<br/>from current affiliation dates.<br/><br/>This preserves institutional visibility<br/>for integrity records after researcher departure."]
+
+    EVENT["Event rule<br/><br/>RetractionEvent may be created by<br/>a monitoring run OR manually verified<br/>by a SYSTEM-LEVEL ADMIN in the MVP.<br/>Every event keeps external provenance.<br/>Manual events use source = manual."]
+
+    STATUS["Status rule<br/><br/>Current publication status is derived<br/>from event history using SOURCE timestamps.<br/><br/>Only RETRACTION and REINSTATEMENT affect status.<br/>Latest applicable event wins:<br/>RETRACTION → RETRACTED<br/>REINSTATEMENT → ACTIVE<br/><br/>CORRECTION and EXPRESSION_OF_CONCERN<br/>remain historical events only."]
+
+    DOI["DOI rule<br/><br/>Valid DOI → pending_resolution → resolved.<br/>Malformed DOI → unmonitored + raw_doi_invalid flag.<br/>No DOI → unmonitored.<br/><br/>A valid DOI is unique within a ResearchPaper:<br/>UNIQUE(research_paper_id, normalized_doi)<br/>WHERE normalized_doi IS NOT NULL."]
+
+    NOTIFY["Notification idempotency rule<br/><br/>Uniqueness boundary:<br/>researcher + event + paper.<br/><br/>Same event affecting 3 different papers<br/>may create 3 notifications.<br/>Repeated citation of the same event<br/>inside one paper creates only one notification."]
+
+    MONITOR["Monitoring checkpoint rule<br/><br/>MonitoringCheck.cursor_value stores<br/>last_index_date as an ISO timestamp.<br/><br/>Crossref cursor=* is runtime-only pagination<br/>and is never persisted between executions."]
+
+    U -.-> AUTH
+    P -.-> PUBAFF
+    E -.-> EVENT
+    W -.-> STATUS
+    Ref -.-> DOI
+    N -.-> NOTIFY
+    MC -.-> MONITOR
+
+    %% =========================
+    %% Technology / current rules
+    %% =========================
+
+    subgraph TECH[Current supporting technology / rules]
+        direction TB
+        AUTHTECH["Supabase Auth<br/>Identity separate from Researcher"]
+        RLS["RLS<br/><br/>Researcher-wide access:<br/>current active affiliation<br/><br/>Paper-level access:<br/>current active affiliation OR<br/>publication-time affiliation snapshot"]
+        PARSER["Server-side BibTeX / RIS parser"]
+        VALIDATE["Zod + DOI normalization<br/>Malformed DOI is flagged, not rejected"]
+        CROSSREF["Crossref REST API<br/>Async metadata resolution"]
+        RETWATCH["Crossref Retraction Watch data<br/>Incremental monitoring via from-index-date"]
+        IDEMP["Notification idempotency<br/>researcher + event + paper"]
+        DELIVERY["MVP delivery tracking<br/>pending • sent • failed"]
+        RETRY["DOI resolution retry policy<br/>5 attempts • exponential backoff<br/>then resolution_permanently_failed"]
+    end
+
+    R -.-> AUTHTECH
+    U -.-> RLS
+    P -.-> PARSER
+    P -.-> VALIDATE
+    W -.-> CROSSREF
+    E -.-> RETWATCH
+    N -.-> IDEMP
+    N -.-> DELIVERY
+    Ref -.-> RETRY
+
+    %% =========================
+    %% Future
+    %% =========================
+
+    subgraph FUTURE[Deferred / future]
+        direction TB
+        PA["PaperAuthors"]
+        G["Grant"]
+        ORCID["ORCID"]
+        OA["OpenAlex"]
+        DC["DataCite"]
+        AUDIT["AuditLog"]
+        ROR["ROR enrichment"]
+    end
+
+    P -.-> PA
+    R -.-> G
+    R -.-> ORCID
+    W -.-> OA
+    W -.-> DC
+    R -.-> AUDIT
+    U -.-> ROR
+
+    classDef core fill:#dbeafe,stroke:#2563eb,stroke-width:2px,color:#111827
+    classDef event fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#111827
+    classDef note fill:#f3f4f6,stroke:#6b7280,stroke-width:1px,color:#111827
+    classDef future fill:#f3e8ff,stroke:#9333ea,stroke-width:1px,stroke-dasharray:5 5,color:#111827
+
+    class U,R,A,P,Ref,W core
+    class E,MC,N event
+    class AUTH,PUBAFF,EVENT,STATUS,DOI,NOTIFY,MONITOR,AUTHTECH,RLS,PARSER,VALIDATE,CROSSREF,RETWATCH,IDEMP,DELIVERY,RETRY note
+    class PA,G,ORCID,OA,DC,AUDIT,ROR future

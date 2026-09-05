@@ -1,0 +1,101 @@
+flowchart LR
+
+    %% =========================
+    %% Import flow
+    %% =========================
+
+    A["1. Researcher uploads<br/>BibTeX / RIS"]
+    B["2. Server-side parse<br/>Dedicated parsing library"]
+    C["3. Validate + normalize<br/>Zod + DOI normalization"]
+    D{"4. DOI syntactically valid?"}
+    E["5. Deduplicate within uploaded file"]
+    F["6. Persist references<br/>Partial success allowed"]
+
+    A --> B --> C --> D
+    D -->|Valid DOI| E
+    D -->|No DOI| E
+    D -->|Malformed DOI| E
+
+    D -.-> INVALID["Malformed DOI<br/>Persist reference as unmonitored<br/>Set raw_doi_invalid = true<br/>Do not reject the whole row"]
+
+    E -.-> DNOTE["Within-file dedupe happens during import.<br/><br/>Database also enforces permanent uniqueness<br/>for valid DOI references within the same paper:<br/><br/>UNIQUE(research_paper_id, normalized_doi)<br/>WHERE normalized_doi IS NOT NULL<br/><br/>A later upload to the same paper performs<br/>upsert / ignore rather than creating a duplicate."]
+
+    E --> F
+    F --> G{"7. Valid DOI present?"}
+
+    G -->|Yes| H["8. Queue DOI resolution"]
+    H --> I["9. Background worker<br/>Crossref REST API"]
+    I --> J["10. Create / update<br/>ScholarlyWork metadata"]
+
+    G -->|No| K["11. Keep reference unmonitored<br/>No supported identifier → no monitoring"]
+
+    %% =========================
+    %% Monitoring flow
+    %% =========================
+
+    L["12. Recurring monitoring trigger"]
+
+    MC["MC — MonitoringCheck<br/><br/>One record per monitoring execution<br/>started • finished • status<br/>items checked • items flagged<br/>cursor_value = last_index_date"]
+
+    CP["Read previous last_index_date<br/>from MonitoringCheck"]
+
+    M["13. Fetch incremental delta<br/>Crossref Retraction Watch data<br/>from-index-date = last_index_date"]
+
+    CURSOR["Runtime pagination only<br/>cursor=*<br/>Used inside this execution when needed<br/>Never persisted between runs"]
+
+    N["14. Match delta vs local<br/>normalized DOI values"]
+    O["15. Inspect matched events<br/>Check external event identity + provenance"]
+    P{"16. New external event?"}
+
+    Q["17. Create RetractionEvent<br/>Store source timestamp + provenance"]
+    R["18. Determine affected papers<br/>and originating citations"]
+    S["19. Create notification per<br/>researcher + event + paper"]
+    T["Known event → idempotent no-op<br/>No duplicate notification"]
+
+    L --> MC
+    MC --> CP --> M
+    M -.-> CURSOR
+    M --> N --> O --> P
+    P -->|Yes| Q --> R --> S
+    P -->|No| T
+    Q -.->|linked to execution when discovered by monitoring| MC
+
+    UPDATE["20. On successful monitoring run<br/>persist latest successful last_index_date"]
+    S --> UPDATE
+    T --> UPDATE
+    UPDATE --> MC
+
+    MCNOTE["Checkpoint rule<br/><br/>Persist last_index_date as cursor_value.<br/>Use it as Crossref from-index-date on next run.<br/><br/>Crossref cursor=* is only request-level pagination.<br/>It is runtime-only and is not the checkpoint."]
+
+    MC -.-> MCNOTE
+
+    QNOTE["Notification rule<br/><br/>Idempotency boundary = researcher + event + paper.<br/><br/>Same event + same researcher + different papers<br/>→ separate notifications.<br/>Same event + same paper → one notification."]
+
+    S -.-> QNOTE
+
+    SOURCE["Source timestamp rule<br/><br/>Chronology uses the timestamp at the external source,<br/>not detection time or insertion time."]
+
+    Q -.-> SOURCE
+
+    %% =========================
+    %% Resolution failure / retry
+    %% =========================
+
+    I -.-> HR["Resolution failure<br/>→ resolution_failed<br/>Retry with exponential backoff<br/>Maximum 5 attempts<br/>Then resolution_permanently_failed"]
+
+    MANUAL["System-level admin manual verification<br/>Creates RetractionEvent with source = manual"]
+    Q -.-> MANUAL
+
+    %% =========================
+    %% Monitoring failure
+    %% =========================
+
+    M -.-> LR["Monitoring/source failure<br/>→ execution failed or retry"]
+    F -.-> ER["Row-level import failure<br/>does not roll back successful rows"]
+
+    %% =========================
+    %% Future boundary
+    %% =========================
+
+    FUTURE["Future / deferred<br/><br/>PaperAuthors • ORCID • ROR enrichment<br/>OpenAlex • DataCite • AuditLog<br/>additional identifiers • advanced notifications"]
+    S -.-> FUTURE
